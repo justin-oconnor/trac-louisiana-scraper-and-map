@@ -24,10 +24,10 @@ on:
     - cron: "0 9 * * *"  # 4:00am CDT (UTC-5) -- mid-March - early November
     - cron: "0 10 * * *" # 4:00am CST (UTC-6) -- early November - mid-March
   workflow_dispatch: {} # allows triggering a run manually from the Actions tab
-
+ 
 permissions:
   contents: read
-
+ 
 jobs:
   scrape-and-publish:
     runs-on: ubuntu-latest
@@ -41,11 +41,11 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-
+ 
           actual_offset="$(TZ=America/Chicago date +%z)"
           schedule="${{ github.event.schedule }}"
           echo "This run's cron: $schedule -- today's actual America/Chicago offset: $actual_offset"
-
+ 
           if [ "$schedule" = "0 9 * * *" ] && [ "$actual_offset" != "-0500" ]; then
             echo "Not Daylight Time today -- the 10am UTC (CST) run handles today's 4am instead. Skipping."
             echo "skip=true" >> "$GITHUB_OUTPUT"
@@ -56,29 +56,60 @@ jobs:
             echo "This is today's real 4am Louisiana-time run -- proceeding."
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
-
+ 
       - name: Check out repository
         if: steps.dst-check.outputs.skip != 'true'
         uses: actions/checkout@v4
-
+ 
       - name: Set up Python
         if: steps.dst-check.outputs.skip != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
+ 
       - name: Install Python dependencies
         if: steps.dst-check.outputs.skip != 'true'
         run: pip install playwright pandas datawrapper
-
-      - name: Install Playwright's Chromium browser
+ 
+      - name: Get installed Playwright version
         if: steps.dst-check.outputs.skip != 'true'
+        id: playwright-version
+        run: |
+          echo "version=$(pip show playwright | grep -i ^Version: | cut -d' ' -f2)" >> "$GITHUB_OUTPUT"
+ 
+      # This caches Playwright's Chromium browser to speed things
+      # up and checks the cached version against Playwright's pip
+      # install version to decide if it needs to redownload
+      # and reinstall.
+      - name: Cache Playwright's Chromium browser
+        if: steps.dst-check.outputs.skip != 'true'
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+ 
+      # Full install (browser download + OS packages) only runs on a
+      # cache miss -- e.g. the very first run, or after a Playwright
+      # version bump.
+      - name: Install Playwright's Chromium browser
+        if: steps.dst-check.outputs.skip != 'true' && steps.playwright-cache.outputs.cache-hit != 'true'
         run: python -m playwright install --with-deps chromium
-
+ 
+      # On a cache hit the browser binary is already restored above, but
+      # the OS-level shared libraries it needs (installed via apt) live
+      # on the runner's disk, not in the cached folder, and this is a
+      # fresh VM every run -- so those still need reinstalling every
+      # time. This is quick (no large download), unlike the browser
+      # install it's replacing here.
+      - name: Install Chromium's OS dependencies (cache hit)
+        if: steps.dst-check.outputs.skip != 'true' && steps.playwright-cache.outputs.cache-hit == 'true'
+        run: python -m playwright install-deps chromium
+ 
       - name: Scrape TRAC Louisiana parish data
         if: steps.dst-check.outputs.skip != 'true'
         run: python trac_louisiana_scraper.py
-
+ 
       - name: Publish to Datawrapper
         if: steps.dst-check.outputs.skip != 'true'
         env:
@@ -87,7 +118,7 @@ jobs:
           DATAWRAPPER_REPRESENTATION_CHART_ID: ${{ vars.DATAWRAPPER_REPRESENTATION_CHART_ID }}
           DATAWRAPPER_TABLE_CHART_ID: ${{ vars.DATAWRAPPER_TABLE_CHART_ID }}
         run: python publish_to_datawrapper.py louisiana_county_cases.csv
-
+ 
       - name: Upload scraped data (debugging aid, not required for the pipeline to work)
         if: steps.dst-check.outputs.skip != 'true' && always()
         uses: actions/upload-artifact@v4
