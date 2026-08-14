@@ -51,7 +51,7 @@ LABEL_PLACES = [
     {"text": "Allen Parish PSC", "lat": 30.622560, "lon": -92.774930, "align": "tl"},
     {"text": "Central LA ICE Processing Center", "lat": 31.7088575, "lon": -92.1529335, "align": "bl"},
     {"text": "Jackson Parish CC", "lat": 32.2158444, "lon": -92.7172768, "align": "tl"},
-    {"text": "LA ICE Processing Center", "lat": 30.9598118, "lon": -91.6071326, "align": "br"},
+    {"text": "LA ICE Processing Center", "lat": 30.9598118, "lon": -91.6071326, "align": "tr"},
     {"text": "Pine Prairie ICE Processing Center", "lat": 30.7890963, "lon": -92.4225038, "align": "br"},
     {"text": "Richwood CC", "lat": 32.4583842, "lon": -92.0782853, "align": "tr"},
     {"text": "River CC", "lat": 31.5971775, "lon": -91.5584304, "align": "tr"},
