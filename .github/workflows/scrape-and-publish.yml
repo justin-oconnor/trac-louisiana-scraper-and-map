@@ -1,0 +1,100 @@
+name: Scrape TRAC and publish to Datawrapper
+
+# Runs trac_louisiana_scraper.py once a day, then feeds its output straight
+# into publish_to_datawrapper.py in the same job (same runner filesystem,
+# no artifact hand-off needed) so the three Datawrapper charts stay current.
+#
+# -------------------------------------------------------------------------
+# Why there are two cron schedules for one 4am run
+# -------------------------------------------------------------------------
+# GitHub Actions cron always runs in UTC and has no concept of daylight savings.
+# US Central Time is UTC-5 during Daylight Time (CDT, roughly mid-March - early
+# November) and UTC-6 during Standard Time (CST, the rest of the year). A single
+# fixed UTC cron would therefore actually fire at 3am or 5am local time for about
+# four months of the year.
+#
+# The fix below: schedule both the CDT and CST versions of 4am every day
+# (9am and 10am UTC), and add a guard step that checks today's actual
+# America/Chicago UTC offset and skips whichever of the two runs doesn't
+# match. Net effect: exactly one real run per day, at 4:00am Louisiana
+# time, correct across the DST switch without needing to update this file
+# twice a year.
+on:
+  schedule:
+    - cron: "0 9 * * *"  # 4:00am CDT (UTC-5) -- mid-March - early November
+    - cron: "0 10 * * *" # 4:00am CST (UTC-6) -- early November - mid-March
+  workflow_dispatch: {} # allows triggering a run manually from the Actions tab
+
+permissions:
+  contents: read
+
+jobs:
+  scrape-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Skip if this isn't today's real 4am-Louisiana-time run
+        id: dst-check
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "Manually triggered (workflow_dispatch) -- running regardless of time."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          actual_offset="$(TZ=America/Chicago date +%z)"
+          schedule="${{ github.event.schedule }}"
+          echo "This run's cron: $schedule -- today's actual America/Chicago offset: $actual_offset"
+
+          if [ "$schedule" = "0 9 * * *" ] && [ "$actual_offset" != "-0500" ]; then
+            echo "Not Daylight Time today -- the 10am UTC (CST) run handles today's 4am instead. Skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif [ "$schedule" = "0 10 * * *" ] && [ "$actual_offset" != "-0600" ]; then
+            echo "Daylight Time is active today -- the 9am UTC (CDT) run already handled today's 4am. Skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "This is today's real 4am Louisiana-time run -- proceeding."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out repository
+        if: steps.dst-check.outputs.skip != 'true'
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        if: steps.dst-check.outputs.skip != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        if: steps.dst-check.outputs.skip != 'true'
+        run: pip install playwright pandas datawrapper
+
+      - name: Install Playwright's Chromium browser
+        if: steps.dst-check.outputs.skip != 'true'
+        run: python -m playwright install --with-deps chromium
+
+      - name: Scrape TRAC Louisiana parish data
+        if: steps.dst-check.outputs.skip != 'true'
+        run: python trac_louisiana_scraper.py
+
+      - name: Publish to Datawrapper
+        if: steps.dst-check.outputs.skip != 'true'
+        env:
+          DATAWRAPPER_ACCESS_TOKEN: ${{ secrets.DATAWRAPPER_ACCESS_TOKEN }}
+          DATAWRAPPER_MAP_CHART_ID: ${{ vars.DATAWRAPPER_MAP_CHART_ID }}
+          DATAWRAPPER_REPRESENTATION_CHART_ID: ${{ vars.DATAWRAPPER_REPRESENTATION_CHART_ID }}
+          DATAWRAPPER_TABLE_CHART_ID: ${{ vars.DATAWRAPPER_TABLE_CHART_ID }}
+        run: python publish_to_datawrapper.py louisiana_county_cases.csv
+
+      - name: Upload scraped data (debugging aid, not required for the pipeline to work)
+        if: steps.dst-check.outputs.skip != 'true' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trac-louisiana-scrape-${{ github.run_id }}
+          path: |
+            louisiana_county_cases.csv
+            data_through.txt
+          retention-days: 14
+          if-no-files-found: ignore
